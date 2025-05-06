@@ -1,0 +1,3 @@
+./model_cache
+./.venv
+model_download.ipynb
