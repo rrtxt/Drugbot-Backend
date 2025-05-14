@@ -10,6 +10,8 @@ class BaseConfig:
     MODEL_CACHE=os.getenv("MODEL_CACHE")
     CHROMA_HOST = os.getenv("CHROMA_HOST")
     CHROMA_PORT = os.getenv("CHROMA_PORT")
+    MONGODB_URI = os.getenv("MONGODB_URI")
+    MONGODB_DBNAME = os.getenv("MONGODB_DB")
 
 class DevConfig(BaseConfig):
     DEBUG = True

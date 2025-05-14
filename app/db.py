@@ -5,14 +5,14 @@ from chromadb.config import Settings
 class VectorStoreSingleton:
     _instance = None  # Stores the single instance
 
-    def __new__(cls, host, port, cache_dir = None):
+    def __new__(cls, host, port, model_name, cache_dir = None):
         """Ensures only one instance of the vector store is created."""
         if cls._instance is None:
             cls._instance = super(VectorStoreSingleton, cls).__new__(cls)
 
             # Initialize Hugging Face Embeddings
             cls._instance.embeddings = HuggingFaceEmbeddings(
-                model_name='distiluse-base-multilingual-cased-v2', 
+                model_name=model_name, 
                 model_kwargs={"device": "cuda"},
                 cache_folder=cache_dir
             )

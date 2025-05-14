@@ -16,7 +16,8 @@ def create_app(env="dev"):
 
     print("Model Path: ", app.config["MODEL_CACHE"])
     # initialize vector store
-    VectorStoreSingleton(app.config["CHROMA_HOST"], app.config["CHROMA_PORT"], app.config["MODEL_CACHE"]) 
+    embeddings_model_id = "distiluse-base-multilingual-cased-v2"
+    VectorStoreSingleton(app.config["CHROMA_HOST"], app.config["CHROMA_PORT"], embeddings_model_id, app.config["MODEL_CACHE"]) 
 
     # Initialize LLM pipeline 
     llm_model_id = "meta-llama/Llama-3.2-1B"

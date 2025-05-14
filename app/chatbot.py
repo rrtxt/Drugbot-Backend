@@ -1,10 +1,11 @@
 from langchain_chroma import Chroma
 from langchain.docstore.document import Document
 from langchain.retrievers.document_compressors.cross_encoder_rerank import CrossEncoderReranker 
-from app.error import DocsNotFoundError
 from typing_extensions import List, TypedDict
 from langchain_core.prompts import PromptTemplate
 from langchain_huggingface.llms import HuggingFacePipeline
+from langchain_core.runnables.history import RunnableWithMessageHistory
+from langchain_mongodb.chat_message_histories import MongoDBChatMessageHistory
 
 def get_bot_response():
     return "Ini respons"
@@ -25,9 +26,6 @@ class Retriever:
         # Get similar documents based on query
         results = self.retriever.invoke(query, filter=filter)
 
-        if len(results) <= 0:
-            raise DocsNotFoundError("Similar document not found")
-
         # Rerank the retrieved documents
         reranked_docs = self.reranker.compress_documents(results)
         
@@ -46,9 +44,27 @@ class Generator:
         self.llm = llm
         self.prompt = PromptTemplate.from_template(template) 
 
-    def generate(self, query, docs : List[Document], skip_prompt : bool = False):
+    def generate(self, query, docs : List[Document], session_id, conn_str, db_name, skip_prompt : bool = False):
         docs_content = "\n\n".join(doc.page_content for doc in docs)
         
         chain = self.prompt | self.llm.bind(skip_prompt=skip_prompt)
-        response = chain.invoke({"query" : query, "context" : docs_content})
+
+        chain_with_history =  RunnableWithMessageHistory(
+            chain,
+            lambda session_id : MongoDBChatMessageHistory(
+                connection_string=conn_str,
+                session_id=session_id,
+                collection_name="chat_history",
+                database_name=db_name,        
+            ),
+            input_messages_key="query",
+            history_messages_key="history",
+            output_messages_key="answer",
+        )
+
+        response = chain_with_history.invoke(
+            {"query" : query, "context" : docs_content},
+            {"configurable" : {"session_id" : session_id}}
+        )
+
         return response
