@@ -3,8 +3,11 @@ from langchain.docstore.document import Document
 from langchain.retrievers.document_compressors.cross_encoder_rerank import CrossEncoderReranker 
 from typing_extensions import List, TypedDict
 from langchain_core.prompts import PromptTemplate
+from langchain_core.tools import BaseTool
 from langchain_huggingface.llms import HuggingFacePipeline
+from langchain_huggingface.chat_models import ChatHuggingFace
 from langchain_core.runnables.history import RunnableWithMessageHistory
+from langchain_core.runnables import RunnableLambda
 from langchain_mongodb.chat_message_histories import MongoDBChatMessageHistory
 
 def get_bot_response():
@@ -42,15 +45,21 @@ class State(TypedDict):
 class Generator:
     def __init__(self, llm : HuggingFacePipeline, template):
         self.llm = llm
-        self.prompt = PromptTemplate.from_template(template) 
+        self.chat = ChatHuggingFace(llm=self.llm)
+        if type(template) == str:
+            self.prompt = PromptTemplate.from_template(template)
+        else:
+            self.prompt = template
 
-    def generate(self, query, docs : List[Document], session_id, conn_str, db_name, skip_prompt : bool = False):
+    def generate(self, query, docs : List[Document], session_id, conn_str, db_name, skip_prompt : bool = True, tools : List[BaseTool] = None):
         docs_content = "\n\n".join(doc.page_content for doc in docs)
+        chat_with_tools = self.chat.bind_tools(tools)
         
-        chain = self.prompt | self.llm.bind(skip_prompt=skip_prompt)
+        base_chain = self.prompt | chat_with_tools.bind(skip_prompt=skip_prompt)
+        chain_with_answer_key = base_chain | RunnableLambda(lambda ai_message: {"answer": ai_message})
 
         chain_with_history =  RunnableWithMessageHistory(
-            chain,
+            chain_with_answer_key,
             lambda session_id : MongoDBChatMessageHistory(
                 connection_string=conn_str,
                 session_id=session_id,

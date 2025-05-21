@@ -4,6 +4,7 @@ from app.db import VectorStoreSingleton
 from app.llm import LLMPipelineSingleton, CrossRerankerSingleton
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_mongodb.chat_message_histories import MongoDBChatMessageHistory
+from langchain_tavily import TavilySearch
 from uuid import uuid4
 
 main = Blueprint('main', __name__)
@@ -37,53 +38,82 @@ def chat_get():
 
 @main.route("/chat", methods=["POST"])
 def chat():
-    query = request.body.get("query")
-    session_id = request.query.get("session_id") if request.query.get("session_id") else str(uuid4())
-    is_using_rag = request.query.get("is_using_rag", "false").lower() == "true"
+    query = request.get_json().get("query")
+    session_id = request.args.get("session_id", str(uuid4()))
+    is_using_rag = request.args.get("is_using_rag", "false").lower() == "true"
 
     if not query:
         return {"error" : "Query is required"}, 400 
 
     if is_using_rag:
-        chroma = VectorStoreSingleton.get_vector_store()
-        reranker = CrossRerankerSingleton.get_reranker()
-        retriever = Retriever(chroma, 10, reranker) 
+        # Get pre-initialized instances
+        vector_store = VectorStoreSingleton.get_instance().get_vector_store()
+        reranker = CrossRerankerSingleton.get_instance().get_reranker()
+        retriever = Retriever(vector_store, 10, reranker)
         docs = retriever.get_relevant_docs(query)
-        template = """Anda adalah seorang asisten medis yang ahli dalam memberikan rekomandasi obat.
-        Berdasarkan informasi-informasi obat yang telah disediakan berikan rekomendasi obat untuk pertanyaan yang diberikan.
-        Rekomendasi obat yang diberikan harus berisi informasi terkait nama obat, deskripsi kegunaan obat, dosis, dan efek samping obat.
-        Berikan rekomendasi dengan maksimum 2 paragraf.
-        Jika kamu tidak mengetahui terkait informasi obat yang diberikan, maka kamu cukup bilang tidak mengetahuinya.
-        Terakhir, tolong kasih tahu ke pengguna bahwa jika dalam waktu 3 hari pengguna masih mengalami gejala yang dialami, maka segera konsultasi ke dokter.
+        template = """Anda adalah seorang asisten medis yang ahli dalam memberikan rekomandasi obat. 
+        Berikut adalah informasi tentang obat yang perlu direkomendasikan:
+        
+        {context}
 
-        Konteks: {context}
+        Berikan jawaban dalam bentuk paragraf yang mengandung informasi berikut:
+
+        1. Nama obat yang direkomendasikan
+        2. Deskripsi dan kegunaan obat tersebut
+        3. Dosis yang disarankan
+        4. Efek samping yang mungkin terjadi
+        5. Dengan tools yang tersedia, cari informasi lebih lanjut tentang obat di Indonesia
+
+        Berikan jawaban dalam maksimal 2 paragraf dan akhiri dengan peringatan: "Jika dalam waktu 3 hari gejala masih berlanjut, segera konsultasi ke dokter."
         """
     else:
         docs = []
         template = """Anda adalah seorang asisten medis yang ahli dalam memberikan rekomandasi obat.
-        Rekomendasi obat yang diberikan harus berisi informasi terkait nama obat, deskripsi kegunaan obat, dosis, dan efek samping obat.
-        Berikan rekomendasi dengan maksimum 2 paragraf.
-        Jika kamu tidak mengetahui terkait informasi obat yang diberikan, maka kamu cukup bilang tidak mengetahuinya.
-        Terakhir, tolong kasih tahu ke pengguna bahwa jika dalam waktu 3 hari pengguna masih mengalami gejala yang dialami, maka segera konsultasi ke dokter.
+        Berikan jawaban dalam bentuk paragraf yang mengandung informasi berikut:
 
-        Konteks: {context}
+        1. Nama obat yang direkomendasikan
+        2. Deskripsi dan kegunaan obat tersebut
+        3. Dosis yang disarankan
+        4. Efek samping yang mungkin terjadi
+        5. Dengan tools yang tersedia, cari informasi lebih lanjut tentang obat di Indonesia
+
+        Berikan jawaban dalam maksimal 2 paragraf dan akhiri dengan peringatan: "Jika dalam waktu 3 hari gejala masih berlanjut, segera konsultasi ke dokter."
+
         """
 
-    llm = LLMPipelineSingleton.get_pipeline()
+    # Get pre-initialized LLM
+    llm = LLMPipelineSingleton.get_instance().get_pipeline()
+
     prompt = ChatPromptTemplate.from_messages([
         ("system", template),
         MessagesPlaceholder(variable_name="history"),
-        ("user", MessagesPlaceholder(variable_name="query"))
+        ("user", "{query}")
     ])
+
+    search_tool = TavilySearch(max_results=5, topic="general")
 
     generator = Generator(llm, prompt)
     conn_str = current_app.config["MONGODB_URI"]
     db_name = current_app.config["MONGODB_DBNAME"]
 
-    response = generator.generate(query, docs, session_id, conn_str, db_name)
-    if isinstance(response, dict):
-        response["session_id"] = session_id
-    else:
-        response = {"response": response, "session_id": session_id}
+    response_from_generator = generator.generate(query, docs, session_id, conn_str, db_name, tools=[search_tool])
 
-    return response
+    # The response_from_generator is expected to be {"answer": AIMessage_object}
+    final_response = {}
+    if isinstance(response_from_generator, dict) and "answer" in response_from_generator:
+        ai_message = response_from_generator["answer"] # This is the AIMessage object
+        
+        # Extract content and any tool calls you might want to send
+        final_response["text_content"] = ai_message.content
+        final_response["tool_calls"] = ai_message.tool_calls if hasattr(ai_message, 'tool_calls') else []
+        # You can add other relevant AIMessage attributes here if needed
+    else:
+        # Fallback if the structure is not as expected (should ideally not happen with current chatbot.py)
+        final_response["text_content"] = "Error: Unexpected response structure from AI."
+        final_response["tool_calls"] = []
+
+    final_response["session_id"] = session_id
+
+    print(final_response)
+
+    return final_response
