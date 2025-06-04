@@ -1,11 +1,12 @@
 from flask import Blueprint, request, current_app
 from app.chatbot import Retriever, Generator
-from app.db import VectorStoreSingleton
+from app.db import VectorStoreSingleton, MongoDBClientSingleton
 from app.llm import LLMPipelineSingleton, CrossRerankerSingleton
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_mongodb.chat_message_histories import MongoDBChatMessageHistory
 from langchain_tavily import TavilySearch
 from uuid import uuid4
+from markupsafe import escape
 
 main = Blueprint('main', __name__)
 
@@ -16,30 +17,69 @@ def home():
 @main.route("/health", methods=["GET"])
 def health_check():
     return {"status" : "ok"}
+
+@main.route("/chat/histories", methods=["GET"])
+def chat_sessions():
+    db_name = current_app.config["MONGODB_DBNAME"]
+    collection_name = "chat_history"
+
+    try:
+        client = MongoDBClientSingleton.get_instance().get_client()
+        db = client[db_name]
+        collection = db[collection_name]
+        session_ids = collection.distinct("SessionId")
+        
+        return {"session_ids": session_ids}
+    except Exception as e:
+        current_app.logger.error(f"Error fetching chat sessions: {e}")
+        return {"error": "Failed to retrieve chat sessions"}, 500
     
-@main.route("/chat", methods=["GET"])
-def chat_get():
-    session_id = request.query.get("session_id")
+@main.route("/chat/histories/<session_id>", methods=["GET"])
+def chat_get(session_id):
+    session_id = escape(session_id)
     if not session_id:
-        return {"error" : "Session ID is required"}, 400
-    conn_str = current_app.config["MONGODB_URI"]
-    chat_history = MongoDBChatMessageHistory(
-        connection_string=conn_str,
-        session_id=session_id,
-        collection_name="chat_history",
-        database_name=current_app.config["MONGODB_DBNAME"],
-    )
+        return {"error": "Session ID is required"}, 400
+    
+    try:
+        
+        conn_str = current_app.config["MONGODB_URI"]
+        chat_history = MongoDBChatMessageHistory(
+            connection_string=conn_str,
+            session_id=session_id,
+            collection_name="chat_history",
+            database_name=current_app.config["MONGODB_DBNAME"],
+        )
 
-    messages = chat_history.messages
+        messages = chat_history.messages
+        history = [{"role": msg.type, "content": msg.content, "created_at": msg.additional_kwargs.get("created_at")} for msg in messages]
 
-    history = [{"role": msg.type, "content": msg.content, "created_at": msg.additional_kwargs.get("created_at")} for msg in messages]
+        return history
+    except Exception as e:
+        current_app.logger.error(f"Error fetching chat history: {e}")
+        return {"error": "Failed to retrieve chat history"}, 500
 
-    return history
+@main.route("/chat/histories/<session_id>", methods=["DELETE"])
+def delete_chat_session(session_id):
+    session_id = escape(session_id)
+    if not session_id:
+        return {"error": "Session ID is required"}, 400
+    
+    try:
+        
+        client = MongoDBClientSingleton.get_instance().get_client()
+        db = client[current_app.config["MONGODB_DBNAME"]]
+        collection = db["chat_history"]
+        collection.delete_one({"SessionId": session_id})
+        return {"message": "Chat session deleted successfully"}, 200
+    
+    except Exception as e:
+        current_app.logger.error(f"Error deleting chat session: {e}")
+        return {"error": "Failed to delete chat session"}, 500
 
 @main.route("/chat", methods=["POST"])
 def chat():
     query = request.get_json().get("query")
-    session_id = request.args.get("session_id", str(uuid4()))
+    session_id = request.get_json().get("session_id")
     is_using_rag = request.args.get("is_using_rag", "false").lower() == "true"
 
     if not query:
@@ -112,7 +152,7 @@ def chat():
         final_response["text_content"] = "Error: Unexpected response structure from AI."
         final_response["tool_calls"] = []
 
-    final_response["session_id"] = session_id
+    final_response["sessionId"] = session_id
 
     print(final_response)
 

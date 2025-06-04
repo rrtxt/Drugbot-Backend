@@ -2,7 +2,7 @@ from flask import Flask
 from huggingface_hub import login
 from app.routes import main
 from app.config import Config
-from app.db import VectorStoreSingleton
+from app.db import VectorStoreSingleton, MongoDBClientSingleton
 from app.llm import LLMPipelineSingleton, CrossRerankerSingleton
 from transformers import BitsAndBytesConfig
 import torch
@@ -16,7 +16,12 @@ def create_app(env="development"):
 
     login(token=app.config["HF_TOKEN"])
 
-    print("Model Path: ", app.config["MODEL_CACHE"])
+    # Initialize MongoDB Client Singleton
+    MongoDBClientSingleton(
+        connection_string=app.config["MONGODB_URI"],
+        default_database_name=app.config["MONGODB_DBNAME"]
+    )
+
     # initialize vector store
     embeddings_model_id = "distiluse-base-multilingual-cased-v2"
     VectorStoreSingleton(
