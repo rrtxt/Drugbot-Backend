@@ -47,7 +47,7 @@ def create_app(env="development"):
     reranker_model_id = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     CrossRerankerSingleton(reranker_model_id) 
 
-    print("Initialized LLM and Reranker models finished!")
+    app.logger.info("Initialized LLM and Reranker models finished!")
 
     app.register_blueprint(main)
 
