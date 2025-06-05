@@ -1,14 +1,20 @@
 from langchain_chroma import Chroma
 from langchain.docstore.document import Document
 from langchain.retrievers.document_compressors.cross_encoder_rerank import CrossEncoderReranker 
-from typing_extensions import List, TypedDict
-from langchain_core.prompts import PromptTemplate
-from langchain_core.tools import BaseTool
+
 from langchain_huggingface.llms import HuggingFacePipeline
 from langchain_huggingface.chat_models import ChatHuggingFace
+
+from langchain_core.prompts import PromptTemplate
+from langchain_core.tools import BaseTool
+from langchain_core.messages import BaseMessage
+
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_core.runnables import RunnableLambda
 from app.custom_history import CustomMongoDBChatMessageHistory
+
+from typing_extensions import List, TypedDict
+from datetime import datetime, timezone
 
 def get_bot_response():
     return "Ini respons"
@@ -53,18 +59,28 @@ class Generator:
         else:
             self.prompt = template
 
+    
+    def _add_rag_info_to_ai_message(self, ai_message : BaseMessage, is_rag : bool):
+        if hasattr(ai_message, "additional_kwargs"):
+            ai_message.additional_kwargs["is_rag"] = is_rag
+            ai_message.additional_kwargs["created_at"] = datetime.now(timezone.utc).isoformat()
+        return {"answer" : ai_message}
+
     def generate(self, query, docs : List[Document], session_id, conn_str, db_name, skip_prompt : bool = True, tools : List[BaseTool] = None):
         docs_content = "\n\n".join(doc for doc in docs)
         chat_with_tools = self.chat.bind_tools(tools)
+        is_rag = bool(docs_content.strip())
         
         base_chain = self.prompt | chat_with_tools.bind(skip_prompt=skip_prompt)
-        chain_with_answer_key = base_chain | RunnableLambda(lambda ai_message: {"answer": ai_message})
+        chain_with_answer_key = base_chain | RunnableLambda(
+            lambda ai_message : self._add_rag_info_to_ai_message(ai_message, is_rag)
+        )
 
         chain_with_history =  RunnableWithMessageHistory(
             chain_with_answer_key,
             lambda session_id : CustomMongoDBChatMessageHistory(
                 connection_string=conn_str,
-                session_id=session_id,
+                session_id=session_id, 
                 collection_name="chat_history",
                 database_name=db_name,
             ),
