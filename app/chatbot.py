@@ -54,7 +54,7 @@ class Generator:
             self.prompt = template
 
     def generate(self, query, docs : List[Document], session_id, conn_str, db_name, skip_prompt : bool = True, tools : List[BaseTool] = None):
-        docs_content = "\n\n".join(doc.page_content for doc in docs)
+        docs_content = "\n\n".join(doc for doc in docs)
         chat_with_tools = self.chat.bind_tools(tools)
         
         base_chain = self.prompt | chat_with_tools.bind(skip_prompt=skip_prompt)
