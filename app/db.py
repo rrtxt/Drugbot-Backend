@@ -54,7 +54,7 @@ class VectorStoreSingleton:
 
 class MongoDBClientSingleton:
     _instance = None
-    _client = None
+    _client = None  # This will be an instance-level attribute, not class-level for client
     _config = None
 
     def __new__(cls, connection_string=None, default_database_name=None):
@@ -63,26 +63,18 @@ class MongoDBClientSingleton:
                 raise ValueError("connection_string and default_database_name must be provided "
                                  "when creating the first instance of MongoDBClientSingleton")
             
-            cls._instance = super(MongoDBClientSingleton, cls).__new__(cls)
+            instance = super(MongoDBClientSingleton, cls).__new__(cls)
+            # Store config on the class for potential re-use if get_instance is called without args later
+            # (though for lazy loading, client should ideally always be re-established if None)
             cls._config = {
                 "connection_string": connection_string,
                 "default_database_name": default_database_name
             }
-            try:
-                cls._client = MongoClient(connection_string)
-                # You can add a server ping here to verify connection if needed
-                # cls._client.admin.command('ping') 
-                print("Successfully connected to MongoDB.")
-            except pymongo_errors.ConnectionFailure as e:
-                print(f"Could not connect to MongoDB: {e}")
-                # Depending on your application's needs, you might want to raise an error here
-                # or handle it differently. For now, we'll allow the app to start
-                # but the client will be None.
-                cls._client = None 
-            except Exception as e:
-                print(f"An unexpected error occurred during MongoDB connection: {e}")
-                cls._client = None
-
+            # Initialize _client to None for each new instance.
+            # The actual connection will be made in get_client().
+            instance._client = None 
+            cls._instance = instance
+            print("MongoDBClientSingleton instance created, client will connect on first use.")
 
         return cls._instance
 
@@ -90,30 +82,42 @@ class MongoDBClientSingleton:
     def get_instance(cls, connection_string=None, default_database_name=None):
         if cls._instance is None:
             if connection_string is None or default_database_name is None:
-                # This ensures that if called without args after initialization, it still works
-                # but the first call *must* have args.
-                if cls._config is None: # Truly the first call attempt without args
+                if cls._config is None: 
                     raise ValueError("connection_string and default_database_name must be provided "
-                                     "for the first call to get_instance.")
-                # If _config exists, it means it was initialized before, re-use config
+                                     "for the first call to get_instance if not already initialized.")
+                # This case is if create_app initialized it, and a worker calls get_instance without args
+                # We'll rely on the stored _config.
                 connection_string = cls._config["connection_string"]
                 default_database_name = cls._config["default_database_name"]
             
         return cls(connection_string, default_database_name)
 
     def get_client(self):
-        """Provides access to the MongoClient instance."""
-        if self._client is None:
-            # Attempt to reconnect if the client is None (e.g., due to initial connection failure)
-            # This is a simple retry, more sophisticated retry logic might be needed for production
+        """Provides access to the MongoClient instance, connecting if necessary."""
+        if self._client is None: # Check instance's client
+            # Ensure _config is available on the instance, falling back to class _config
+            # This handles the case where get_instance was called by a worker without args after preload
+            config_to_use = self._config if hasattr(self, '_config') and self._config else MongoDBClientSingleton._config
+
+            if config_to_use is None:
+                # This should ideally not happen if initialization logic is correct
+                raise RuntimeError("MongoDBClientSingleton configuration is missing. Cannot create client.")
+
             try:
-                print("Attempting to reconnect to MongoDB...")
-                self._client = MongoClient(self._config["connection_string"])
-                # self._client.admin.command('ping') # Optional: verify connection
-                print("Successfully reconnected to MongoDB.")
+                print(f"Attempting to connect to MongoDB using: {config_to_use['connection_string'][:30]}...") # Log part of URI
+                self._client = MongoClient(config_to_use["connection_string"])
+                # Optional: Ping to verify connection. Gunicorn workers might do this implicitly.
+                self._client.admin.command('ping')
+                print("Successfully connected to MongoDB in worker.")
+            except pymongo_errors.ConnectionFailure as e:
+                print(f"Could not connect to MongoDB in worker: {e}")
+                self._client = None # Ensure client remains None on failure
+                # Depending on your app's needs, you might re-raise or return None
+                raise # Re-raise the exception to make the failure visible
             except Exception as e:
-                print(f"Failed to reconnect to MongoDB: {e}")
-                return None # Or raise an error
+                print(f"An unexpected error occurred during MongoDB connection in worker: {e}")
+                self._client = None # Ensure client remains None on failure
+                raise # Re-raise
         return self._client
 
     def get_database(self, db_name=None):
