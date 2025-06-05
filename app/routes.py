@@ -1,12 +1,16 @@
 from flask import Blueprint, request, current_app
+
 from app.chatbot import Retriever, Generator
 from app.db import VectorStoreSingleton, MongoDBClientSingleton
 from app.llm import LLMPipelineSingleton, CrossRerankerSingleton
+
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_mongodb.chat_message_histories import MongoDBChatMessageHistory
 from langchain_tavily import TavilySearch
-from uuid import uuid4
+
 from markupsafe import escape
+from uuid import uuid4
+from datetime import datetime, timezone
 
 main = Blueprint('main', __name__)
 
@@ -64,7 +68,6 @@ def delete_chat_session(session_id):
         return {"error": "Session ID is required"}, 400
     
     try:
-        
         client = MongoDBClientSingleton.get_instance().get_client()
         db = client[current_app.config["MONGODB_DBNAME"]]
         collection = db["chat_history"]
@@ -94,6 +97,21 @@ def chat():
             current_app.logger.info(f"Successfully initialized RAG pipeline")  
 
             docs = retriever.get_relevant_docs(query)
+
+            current_app.logger.info(f"Retrieved Docs: {docs}")
+            
+            # Store retrieved docs in MongoDB
+            client = MongoDBClientSingleton.get_instance().get_client()
+            db = client[current_app.config["MONGODB_DBNAME"]]
+            collection = db["retrieved_docs"]
+            collection.insert_one({
+                "session_id": session_id,
+                "query": query,
+                "docs": docs,
+                "created_at": datetime.now(timezone.utc)
+            })
+
+
             template = """Anda adalah seorang asisten medis yang ahli dalam memberikan rekomandasi obat. 
             Berikut adalah informasi tentang obat yang perlu direkomendasikan:
             
