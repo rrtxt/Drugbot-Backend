@@ -41,7 +41,7 @@ class Retriever:
         # Get top 5 reranked documents
         top_docs = reranked_docs[:5]
 
-        result_docs = [ f'Drugs {docs.metadata["drug_name"]}: {docs.page_content}' for docs in top_docs]
+        result_docs = [ docs.page_content for docs in top_docs]
 
         return result_docs
 
@@ -63,7 +63,6 @@ class Generator:
     def _add_rag_info_to_ai_message(self, ai_message : BaseMessage, is_rag : bool):
         if hasattr(ai_message, "additional_kwargs"):
             ai_message.additional_kwargs["is_rag"] = is_rag
-            ai_message.additional_kwargs["created_at"] = datetime.now(timezone.utc).isoformat()
         return {"answer" : ai_message}
 
     def generate(self, query, docs : List[Document], session_id, conn_str, db_name, skip_prompt : bool = True, tools : List[BaseTool] = None):
