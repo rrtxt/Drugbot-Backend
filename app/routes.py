@@ -54,7 +54,10 @@ def chat_get(session_id):
         )
 
         messages = chat_history.messages
-        history = [{"role": msg.type, "content": msg.content, "created_at": msg.additional_kwargs.get("created_at")} for msg in messages]
+        history = [{"role": msg.type, 
+                    "content": msg.content, 
+                    "created_at": msg.additional_kwargs.get("created_at"), 
+                    "is_rag": msg.additional_kwargs.get("is_rag")} for msg in messages]
 
         return history
     except Exception as e:
@@ -71,7 +74,7 @@ def delete_chat_session(session_id):
         client = MongoDBClientSingleton.get_instance().get_client()
         db = client[current_app.config["MONGODB_DBNAME"]]
         collection = db["chat_history"]
-        collection.delete_one({"SessionId": session_id})
+        collection.delete_many({"SessionId": session_id})
         return {"message": "Chat session deleted successfully"}, 200
     
     except Exception as e:
@@ -86,7 +89,7 @@ def chat():
         is_using_rag = request.args.get("is_using_rag", "false").lower() == "true"
 
         if not query:
-            return {"error" : "Query is required"}, 400 
+            return {"error" : "Query is required"}, 400
 
         if is_using_rag:
             # Get pre-initialized instances
@@ -110,7 +113,6 @@ def chat():
                 "docs": docs,
                 "created_at": datetime.now(timezone.utc)
             })
-
 
             template = """Anda adalah seorang asisten medis yang ahli dalam memberikan rekomandasi obat. 
             Berikut adalah informasi tentang obat yang perlu direkomendasikan:
